@@ -30,7 +30,19 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "INITIAL_ADMIN_PASSWORD", "\"$initialAdminPassword\"")
+    }
+
+    flavorDimensions += "role"
+    productFlavors {
+        create("user") {
+            dimension = "role"
+            isDefault = true
+        }
+        create("admin") {
+            dimension = "role"
+            // Solo la variante administrativa recibe el secreto de arranque para admin_maestro.
+            buildConfigField("String", "INITIAL_ADMIN_PASSWORD", "\"$initialAdminPassword\"")
+        }
     }
 
     buildTypes {
