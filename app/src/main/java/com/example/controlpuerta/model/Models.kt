@@ -3,6 +3,10 @@ package com.example.controlpuerta.model
 data class Usuario(
     val username: String = "",
     val passwordHash: String = "",
+    /** Sal aleatoria (hex). Vacía en cuentas heredadas con SHA-512 plano, que se migran al iniciar sesión. */
+    val passwordSalt: String = "",
+    /** Iteraciones PBKDF2. 0 indica hash heredado SHA-512. */
+    val hashIterations: Int = 0,
     val rol: String = "USUARIO",
     val intentosFallidos: Int = 0,
     val bloqueado: Boolean = false

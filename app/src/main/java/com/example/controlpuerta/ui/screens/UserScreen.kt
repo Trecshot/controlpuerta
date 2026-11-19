@@ -66,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -81,6 +82,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.controlpuerta.BuildConfig
 import com.example.controlpuerta.model.EstadoPuerta
 import com.example.controlpuerta.model.RegistroAcceso
 import com.example.controlpuerta.model.Usuario
@@ -92,16 +94,19 @@ import com.example.controlpuerta.util.rememberIsNetworkConnected
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val USER_SCREEN_TAG = "ControlPuertaIoT"
+private const val COMMAND_CONFIRMATION_TIMEOUT_MS = 10_000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun UserScreen(
     currentUser: Usuario,
     repository: DoorOperatorRepository,
-    onLogout: () -> Unit
+    onLogout: (reason: String?) -> Unit,
+    allowSimulation: Boolean = BuildConfig.ALLOW_SIMULATION
 ) {
     var estadoPuerta by remember { mutableStateOf(EstadoPuerta()) }
     var hasLoadedDoorState by remember { mutableStateOf(false) }
@@ -117,7 +122,8 @@ fun UserScreen(
     val btConectando by btController.conectando.collectAsState()
     val btNombre by btController.dispositivoNombre.collectAsState()
 
-    var modoSimulacion by rememberSaveable { mutableStateOf(true) }
+    // En producción (release) la simulación está deshabilitada: la APK de usuario solo opera hardware real.
+    var modoSimulacion by rememberSaveable { mutableStateOf(allowSimulation) }
     var mostrarSelectorBt by remember { mutableStateOf(false) }
     var dispositivosVinculados by remember { mutableStateOf<List<BluetoothDevice>>(emptyList()) }
 
@@ -125,6 +131,9 @@ fun UserScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val formatter = remember { SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()) }
+    val currentOnLogout by rememberUpdatedState(onLogout)
+    val registrosVisibles = remember(bitacoraPropia) { AccessRolePolicy.distinctRecords(bitacoraPropia) }
+
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -185,15 +194,78 @@ fun UserScreen(
             hasLoadedLogs = true
         }
 
+        val removeSessionWatcher = repository.observarSesionUsuario(
+            username = currentUser.username,
+            expectedRol = currentUser.rol
+        ) { message ->
+            // Cuenta bloqueada/eliminada/cambio de rol por el administrador: cierre inmediato.
+            currentOnLogout(message)
+        }
+
         onDispose {
             removeDoorListener()
             removeLogsListener()
+            removeSessionWatcher()
         }
     }
 
+    val activarCierreFailSafe: () -> Unit = {
+        isCommandPending = false
+        estadoPuerta = estadoPuerta.copy(
+            abierta = false,
+            sensorReed = AccessRolePolicy.SENSOR_CERRADO,
+            buzzerActivo = false,
+            ultimoUsuario = currentUser.username,
+            ultimaActualizacion = System.currentTimeMillis()
+        )
+        repository.aplicarBloqueoFailSafe(currentUser)
+    }
+
+    // Fail-Safe / Fail-Secure real: ante corte de energía del Arduino/HC-05 o pérdida pasiva de Bluetooth,
+    // la puerta queda CERRADA y bloqueada por defecto.
+    LaunchedEffect(btController) {
+        btController.conexionPerdida.collect {
+            activarCierreFailSafe()
+            snackbarHostState.showSnackbar(
+                "Corte de Bluetooth/energía detectado. Fail-Secure activo: Puerta CERRADA y bloqueada."
+            )
+        }
+    }
+
+    // Si la puerta estaba abierta y cae el enlace operativo (red en simulación o Bluetooth en hardware),
+    // se fuerza inmediatamente el estado seguro CERRADO y bloqueado (Fail-Secure).
     LaunchedEffect(isNetworkConnected, btConectado, modoSimulacion) {
-        if (!DoorLinkPolicy.isLinkOperational(modoSimulacion, isNetworkConnected, btConectado)) {
+        val linkOk = DoorLinkPolicy.isLinkOperational(modoSimulacion, isNetworkConnected, btConectado)
+        if (!linkOk && estadoPuerta.abierta) {
+            activarCierreFailSafe()
+            snackbarHostState.showSnackbar(
+                "Enlace interrumpido con puerta abierta. Fail-Secure activo: Puerta CERRADA y bloqueada."
+            )
+        }
+    }
+
+    // Telemetría asíncrona del sensor magnético Reed enviada por el Arduino (si el sketch reporta por Serial).
+    LaunchedEffect(btController, modoSimulacion) {
+        if (!modoSimulacion) {
+            btController.telemetriaReed.collect { reedReportado ->
+                if (estadoPuerta.sensorReed != reedReportado) {
+                    estadoPuerta = estadoPuerta.copy(
+                        sensorReed = reedReportado,
+                        ultimaActualizacion = System.currentTimeMillis()
+                    )
+                }
+            }
+        }
+    }
+
+    // Un comando nunca queda "pendiente" indefinidamente (p. ej. sin red la confirmación del servidor tarda).
+    LaunchedEffect(isCommandPending) {
+        if (isCommandPending) {
+            delay(COMMAND_CONFIRMATION_TIMEOUT_MS)
             isCommandPending = false
+            snackbarHostState.showSnackbar(
+                "Sin confirmación del servidor todavía. El registro se sincronizará al recuperar la conexión."
+            )
         }
     }
 
@@ -220,27 +292,32 @@ fun UserScreen(
                 }
             } else {
                 val comando = DoorLinkPolicy.commandForDoorAction(abrir)
-                btController.enviarComando(comando) { exito, _ ->
+                btController.enviarComando(comando) { exito, _, reedReportado ->
                     if (exito) {
-                        repository.cambiarEstadoPuerta(abrir, currentUser) { success, message ->
+                        repository.cambiarEstadoPuerta(
+                            abierta = abrir,
+                            usuario = currentUser,
+                            sensorReedConfirmado = reedReportado
+                        ) { success, message ->
                             isCommandPending = false
                             if (!success) {
                                 coroutineScope.launch {
-                                    snackbarHostState.showSnackbar(message)
+                                    snackbarHostState.showSnackbar(
+                                        "La cerradura respondió, pero no se pudo registrar el evento: $message"
+                                    )
                                 }
                             }
                         }
                     } else {
+                        // Fallo de transmisión Bluetooth: se aplica Fail-Secure (puerta CERRADA y bloqueada).
                         if (estadoPuerta.abierta) {
-                            repository.cambiarEstadoPuerta(false, currentUser) { _, _ ->
-                                isCommandPending = false
-                            }
+                            activarCierreFailSafe()
                         } else {
                             isCommandPending = false
                         }
                         coroutineScope.launch {
                             snackbarHostState.showSnackbar(
-                                "Se perdió la conexión con la cerradura. Bloqueo de seguridad activo."
+                                "Fallo de enlace con la cerradura. Fail-Secure activo: Puerta CERRADA y bloqueada."
                             )
                         }
                     }
@@ -270,7 +347,7 @@ fun UserScreen(
             TopAppBar(
                 title = { Text("Usuario: ${currentUser.username}") },
                 actions = {
-                    IconButton(onClick = onLogout) {
+                    IconButton(onClick = { onLogout(null) }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ExitToApp,
                             contentDescription = "Cerrar sesión"
@@ -321,6 +398,7 @@ fun UserScreen(
                 item(key = "connection_failsafe") {
                     ConnectionModeAndFailSafeCard(
                         modoSimulacion = modoSimulacion,
+                        allowSimulation = allowSimulation,
                         isNetworkConnected = isNetworkConnected,
                         isFromCache = isFromCache,
                         btConectado = btConectado,
@@ -390,7 +468,7 @@ fun UserScreen(
                     items(count = 3, key = { idx -> "skeleton_log_$idx" }) {
                         LogSkeletonCard()
                     }
-                } else if (bitacoraPropia.isEmpty()) {
+                } else if (registrosVisibles.isEmpty()) {
                     item(key = "empty_logs") {
                         Card(modifier = Modifier.fillMaxWidth()) {
                             Text(
@@ -403,8 +481,8 @@ fun UserScreen(
                     }
                 } else {
                     items(
-                        items = bitacoraPropia,
-                        key = { item -> item.id.ifEmpty { "${item.timestamp}_${item.accion}" } }
+                        items = registrosVisibles,
+                        key = { item -> AccessRolePolicy.recordKey(item) }
                     ) { item ->
                         AccessLogItemCard(
                             registro = item,
@@ -420,6 +498,7 @@ fun UserScreen(
 @Composable
 private fun ConnectionModeAndFailSafeCard(
     modoSimulacion: Boolean,
+    allowSimulation: Boolean,
     isNetworkConnected: Boolean,
     isFromCache: Boolean,
     btConectado: Boolean,
@@ -457,17 +536,17 @@ private fun ConnectionModeAndFailSafeCard(
     }
     val detailText = when {
         modoSimulacion && !isNetworkConnected ->
-            "Se perdió la conexión a internet. Por seguridad, la puerta permanece cerrada hasta recuperar la señal."
+            "Se perdió la conexión a internet. Fail-Secure activo: la puerta queda CERRADA y bloqueada por defecto."
         modoSimulacion ->
             "Modo de prueba activo (sin conexión física a la puerta)."
         btConectando ->
-            "Vinculando con la cerradura por Bluetooth..."
+            "Vinculando con la cerradura por Bluetooth (proximidad física en puerta)..."
         btConectado && !isNetworkConnected ->
-            "Cerradura conectada, pero se requiere internet para guardar el historial."
+            "Proximidad Bluetooth HC-05 activa. Puede operar sin internet; la bitácora se sincronizará al recuperar señal."
         btConectado ->
-            "Conectado a la cerradura inteligente. Listo para abrir o cerrar."
+            "Proximidad física Bluetooth (HC-05) activa. Listo para abrir o cerrar en la puerta."
         else ->
-            "Encienda el Bluetooth del teléfono y seleccione la cerradura para operar."
+            "Fail-Secure activo (Puerta CERRADA y bloqueada por defecto). Conecte el Bluetooth HC-05 frente a la puerta para operar."
     }
 
     Card(
@@ -519,13 +598,15 @@ private fun ConnectionModeAndFailSafeCard(
                         fontWeight = FontWeight.SemiBold,
                         color = contentColor
                     )
-                    Switch(
-                        checked = !modoSimulacion,
-                        onCheckedChange = onToggleHardwareMode,
-                        modifier = Modifier.semantics {
-                            contentDescription = "Alternar entre modo de prueba y conexión física a la cerradura"
-                        }
-                    )
+                    if (allowSimulation) {
+                        Switch(
+                            checked = !modoSimulacion,
+                            onCheckedChange = onToggleHardwareMode,
+                            modifier = Modifier.semantics {
+                                contentDescription = "Alternar entre modo de prueba y conexión física a la cerradura"
+                            }
+                        )
+                    }
                 }
             }
 

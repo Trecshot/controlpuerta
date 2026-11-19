@@ -108,5 +108,52 @@ class AccessRolePolicyTest {
 
         assertEquals("Abierta", AccessRolePolicy.formatUserFriendlyDoorState("ABIERTO"))
         assertEquals("Cerrada", AccessRolePolicy.formatUserFriendlyDoorState("CERRADO"))
+        assertEquals("Sin verificar", AccessRolePolicy.formatUserFriendlyDoorState("DESCONOCIDO"))
+        assertEquals(
+            "Cerrada y bloqueada por seguridad (Fail-Safe)",
+            AccessRolePolicy.formatUserFriendlyAction("CIERRE_FAIL_SAFE")
+        )
+        assertEquals(
+            "Cerrada y bloqueada por pérdida de enlace",
+            AccessRolePolicy.formatUserFriendlyAction("ENLACE_PERDIDO")
+        )
+    }
+
+    @Test
+    fun deniedMessageMatchesRejectedRole() {
+        assertEquals(AccessRolePolicy.MSG_MOBILE_USER_ONLY, AccessRolePolicy.deniedMessageForRole("ADMIN"))
+        assertEquals(AccessRolePolicy.MSG_UNRECOGNIZED_ROLE, AccessRolePolicy.deniedMessageForRole("GUEST"))
+        assertEquals(AccessRolePolicy.MSG_UNRECOGNIZED_ROLE, AccessRolePolicy.deniedMessageForRole(""))
+    }
+
+    @Test
+    fun onlyKnownRolesAreAssignable() {
+        assertTrue(AccessRolePolicy.isAssignableRole("USUARIO"))
+        assertTrue(AccessRolePolicy.isAssignableRole("ADMIN"))
+        assertFalse(AccessRolePolicy.isAssignableRole("admin"))
+        assertFalse(AccessRolePolicy.isAssignableRole("ADMIN:root"))
+        assertFalse(AccessRolePolicy.isAssignableRole(""))
+    }
+
+    @Test
+    fun filterOwnAccessRecordsHandlesNonPositiveMaxItemsAndAdminEvents() {
+        val logs = listOf(
+            RegistroAcceso("1", "operador1", "USUARIO", "APERTURA_PUERTA", "ABIERTO", 1L),
+            RegistroAcceso("2", "operador1", "ADMIN:root", "BLOQUEO_MANUAL_ADMIN", "CERRADO", 2L)
+        )
+        assertTrue(AccessRolePolicy.filterOwnAccessRecords(logs, "operador1", maxItems = 0).isEmpty())
+        assertTrue(AccessRolePolicy.filterOwnAccessRecords(logs, "operador1", maxItems = -3).isEmpty())
+        assertEquals(listOf("1"), AccessRolePolicy.filterOwnAccessRecords(logs, "operador1").map { it.id })
+    }
+
+    @Test
+    fun distinctRecordsPreventsDuplicateLazyListKeys() {
+        val sameWithoutId = RegistroAcceso("", "operador1", "USUARIO", "APERTURA_PUERTA", "ABIERTO", 10L)
+        val result = AccessRolePolicy.distinctRecords(listOf(sameWithoutId, sameWithoutId.copy()))
+        assertEquals(1, result.size)
+        assertEquals(
+            result.map { AccessRolePolicy.recordKey(it) }.toSet().size,
+            result.size
+        )
     }
 }

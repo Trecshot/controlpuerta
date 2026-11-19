@@ -44,8 +44,7 @@ fun rememberIsNetworkConnected(): State<Boolean> {
                     network: Network,
                     networkCapabilities: NetworkCapabilities
                 ) {
-                    isConnected.value =
-                        networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    isConnected.value = hasValidatedInternet(networkCapabilities)
                 }
             }
 
@@ -73,9 +72,16 @@ private fun checkCurrentInternetConnectivity(connectivityManager: ConnectivityMa
     return try {
         val activeNetwork = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(activeNetwork) ?: return false
-        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        hasValidatedInternet(capabilities)
     } catch (e: SecurityException) {
         Log.e(NETWORK_TAG, "Permiso insuficiente al consultar conectividad: ${e.message}", e)
         false
     }
 }
+
+/**
+ * Exige salida real a internet (VALIDATED): descarta portales cautivos y redes sin salida.
+ */
+private fun hasValidatedInternet(capabilities: NetworkCapabilities): Boolean =
+    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+        capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)

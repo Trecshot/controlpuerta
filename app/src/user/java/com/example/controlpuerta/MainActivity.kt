@@ -18,7 +18,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val repository = FirebaseRepository()
-        repository.inicializarEstadoPuerta()
+        if (savedInstanceState == null) {
+            // Evita lecturas redundantes de arranque al recrear la Activity.
+            repository.inicializarEstadoPuerta()
+        }
 
         setContent {
             ControlPuertaTheme {

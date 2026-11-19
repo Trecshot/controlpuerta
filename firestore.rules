@@ -1,0 +1,101 @@
+rules_version = '2';
+
+// ============================================================================
+// WARNING: This app does NOT use Firebase Auth (request.auth is always null).
+// These rules can only enforce schema validation and invariants. They CANNOT
+// enforce identity or authorization: anyone with the project config can read
+// and write the allowed collections. Real access control requires migrating
+// to Firebase Auth (and custom claims for roles) and tightening these rules.
+// Prototype: review and test before production use.
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isStr(v, minLen, maxLen) {
+      return v is string && v.size() >= minLen && v.size() <= maxLen;
+    }
+
+    function validSensor(v) {
+      return v is string && v in ['ABIERTO', 'CERRADO', 'DESCONOCIDO'];
+    }
+
+    // ---------------- usuarios ----------------
+    function validUsername(u) {
+      return u is string && u.matches('^[A-Za-z0-9][A-Za-z0-9._-]{2,31}$');
+    }
+
+    function validUsuario(d, id) {
+      return d.keys().hasOnly(['username', 'passwordHash', 'passwordSalt',
+                               'hashIterations', 'rol', 'intentosFallidos', 'bloqueado'])
+        && d.keys().hasAll(['username', 'passwordHash', 'passwordSalt',
+                            'hashIterations', 'rol', 'intentosFallidos', 'bloqueado'])
+        && validUsername(d.username) && d.username == id
+        && isStr(d.passwordHash, 1, 256)
+        && isStr(d.passwordSalt, 0, 256)
+        && d.hashIterations is int && d.hashIterations >= 0 && d.hashIterations <= 10000000
+        && d.rol is string && d.rol in ['USUARIO', 'ADMIN']
+        && d.intentosFallidos is int && d.intentosFallidos >= 0 && d.intentosFallidos <= 3
+        && d.bloqueado is bool;
+    }
+
+    match /usuarios/{username} {
+      allow get, list: if true;
+
+      allow create: if validUsuario(request.resource.data, username)
+        && request.resource.data.intentosFallidos == 0
+        && request.resource.data.bloqueado == false;
+
+      allow update: if validUsuario(request.resource.data, username)
+        && request.resource.data.username == resource.data.username
+        && request.resource.data.rol == resource.data.rol
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['intentosFallidos', 'bloqueado', 'passwordHash',
+                       'passwordSalt', 'hashIterations']);
+
+      allow delete: if username != 'admin_maestro';
+    }
+
+    // ---------------- bitacora_accesos (immutable audit log) ----------------
+    function validBitacora(d, id) {
+      return d.keys().hasOnly(['id', 'username', 'rol', 'accion', 'sensorReed', 'timestamp'])
+        && d.keys().hasAll(['id', 'username', 'rol', 'accion', 'sensorReed', 'timestamp'])
+        && isStr(d.id, 1, 128) && d.id == id
+        && validUsername(d.username)
+        && d.rol is string && d.rol.size() <= 64
+        && d.rol.matches('^(USUARIO|ADMIN|ADMIN:.{1,50})$')
+        && isStr(d.accion, 1, 200)
+        && validSensor(d.sensorReed)
+        && d.timestamp is int && d.timestamp > 0;
+    }
+
+    match /bitacora_accesos/{id} {
+      allow get, list: if true;
+      allow create: if validBitacora(request.resource.data, id);
+      allow update, delete: if false;
+    }
+
+    // ---------------- dispositivo_iot ----------------
+    function validDispositivo(d) {
+      return d.keys().hasOnly(['abierta', 'sensorReed', 'buzzerActivo',
+                               'ultimoUsuario', 'ultimaActualizacion'])
+        && d.keys().hasAll(['abierta', 'sensorReed', 'buzzerActivo',
+                            'ultimoUsuario', 'ultimaActualizacion'])
+        && d.abierta is bool
+        && validSensor(d.sensorReed)
+        && d.buzzerActivo is bool
+        && isStr(d.ultimoUsuario, 0, 128)
+        && d.ultimaActualizacion is int && d.ultimaActualizacion >= 0;
+    }
+
+    match /dispositivo_iot/puerta_principal {
+      allow get, list: if true;
+      allow create, update: if validDispositivo(request.resource.data);
+      allow delete: if false;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

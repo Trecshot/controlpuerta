@@ -17,12 +17,20 @@ class SessionPolicyTest {
     }
 
     @Test
+    fun nonPositiveTtlExpiresImmediately() {
+        assertEquals(5_000L, SessionPolicy.calculateExpiresAt(5_000L, ttlMillis = 0L))
+        assertEquals(5_000L, SessionPolicy.calculateExpiresAt(5_000L, ttlMillis = -1L))
+        assertEquals(5_000L, SessionPolicy.calculateExpiresAt(5_000L, ttlMillis = Long.MIN_VALUE))
+    }
+
+    @Test
     fun isSessionActiveRespectsExpirationBoundary() {
         val expiresAt = 10_000L
         assertTrue(SessionPolicy.isSessionActive(expiresAtMillis = expiresAt, nowMillis = 9_999L))
         assertTrue(SessionPolicy.isSessionActive(expiresAtMillis = expiresAt, nowMillis = 10_000L))
         assertFalse(SessionPolicy.isSessionActive(expiresAtMillis = expiresAt, nowMillis = 10_001L))
         assertFalse(SessionPolicy.isSessionActive(expiresAtMillis = 0L, nowMillis = 100L))
+        assertFalse(SessionPolicy.isSessionActive(expiresAtMillis = -50L, nowMillis = 100L))
     }
 
     @Test
@@ -38,29 +46,17 @@ class SessionPolicyTest {
         assertEquals("operador1", valid?.username)
         assertEquals("USUARIO", valid?.rol)
 
-        assertNull(
-            SessionPolicy.validateStoredSession(
-                username = "",
-                rol = "USUARIO",
-                expiresAtMillis = now + 60_000L,
-                nowMillis = now
-            )
-        )
-        assertNull(
-            SessionPolicy.validateStoredSession(
-                username = "operador1",
-                rol = "",
-                expiresAtMillis = now + 60_000L,
-                nowMillis = now
-            )
-        )
-        assertNull(
-            SessionPolicy.validateStoredSession(
-                username = "operador1",
-                rol = "USUARIO",
-                expiresAtMillis = now - 1L,
-                nowMillis = now
-            )
-        )
+        assertNull(SessionPolicy.validateStoredSession("", "USUARIO", now + 60_000L, now))
+        assertNull(SessionPolicy.validateStoredSession("operador1", "", now + 60_000L, now))
+        assertNull(SessionPolicy.validateStoredSession("operador1", "USUARIO", now - 1L, now))
+    }
+
+    @Test
+    fun validateStoredSessionRejectsNullAndWhitespaceOnlyFields() {
+        val now = 50_000L
+        assertNull(SessionPolicy.validateStoredSession(null, "USUARIO", now + 1, now))
+        assertNull(SessionPolicy.validateStoredSession("operador1", null, now + 1, now))
+        assertNull(SessionPolicy.validateStoredSession("   ", "USUARIO", now + 1, now))
+        assertNull(SessionPolicy.validateStoredSession("operador1", "   ", now + 1, now))
     }
 }

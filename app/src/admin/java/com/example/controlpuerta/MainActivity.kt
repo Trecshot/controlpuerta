@@ -9,6 +9,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import com.example.controlpuerta.repository.FirebaseRepository
 import com.example.controlpuerta.security.AccessRolePolicy
+import com.example.controlpuerta.ui.screens.AdminBootstrapGate
 import com.example.controlpuerta.ui.screens.AdminScreen
 import com.example.controlpuerta.ui.screens.UserScreen
 import com.example.controlpuerta.ui.session.ControlPuertaSessionRoot
@@ -20,28 +21,32 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val repository = FirebaseRepository()
-        repository.inicializarSistema()
+        if (savedInstanceState == null) {
+            repository.inicializarSistema()
+        }
 
         setContent {
             ControlPuertaTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    ControlPuertaSessionRoot(
-                        repository = repository,
-                        allowAdmin = true,
-                        roleSubtitle = "Acceso autorizado"
-                    ) { user, onLogout ->
-                        if (user.rol == AccessRolePolicy.ROL_ADMIN) {
-                            AdminScreen(
-                                currentUser = user,
-                                repository = repository,
-                                onLogout = onLogout
-                            )
-                        } else {
-                            UserScreen(
-                                currentUser = user,
-                                repository = repository,
-                                onLogout = onLogout
-                            )
+                    AdminBootstrapGate(repository = repository) {
+                        ControlPuertaSessionRoot(
+                            repository = repository,
+                            allowAdmin = true,
+                            roleSubtitle = "Acceso autorizado"
+                        ) { user, onLogout ->
+                            if (user.rol == AccessRolePolicy.ROL_ADMIN) {
+                                AdminScreen(
+                                    currentUser = user,
+                                    repository = repository,
+                                    onLogout = onLogout
+                                )
+                            } else {
+                                UserScreen(
+                                    currentUser = user,
+                                    repository = repository,
+                                    onLogout = onLogout
+                                )
+                            }
                         }
                     }
                 }

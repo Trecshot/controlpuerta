@@ -81,7 +81,12 @@ fun LoginScreen(
     val activeError = externalErrorMessage ?: feedbackMessage
 
     val attemptLogin: () -> Unit = {
-        if (!isLoading) {
+        if (!isLoading && (username.isBlank() || password.isEmpty())) {
+            // Validación local: no consume red, no dispara háptica de "carga" ni cuenta intentos.
+            onDismissExternalError()
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            feedbackMessage = "Debe ingresar usuario y contraseña."
+        } else if (!isLoading) {
             focusManager.clearFocus()
             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
             isLoading = true

@@ -1,3 +1,2 @@
 ## Copia este archivo como local.properties (sin subirlo a Git)
 sdk.dir=RUTA_AL_ANDROID_SDK
-admin.initial.password=CAMBIAR_POR_CLAVE_SEGURA

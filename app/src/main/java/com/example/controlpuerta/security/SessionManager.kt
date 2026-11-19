@@ -9,6 +9,7 @@ import androidx.core.content.edit
 import com.example.controlpuerta.model.Usuario
 import java.security.GeneralSecurityException
 import java.security.KeyStore
+import java.security.ProviderException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -64,6 +65,10 @@ class SessionManager(context: Context) {
         } catch (e: GeneralSecurityException) {
             Log.e(TAG, "SESSION_ENCRYPT_ERROR: No se pudo cifrar la sesión: ${e.message}", e)
             cerrarSesion()
+        } catch (e: ProviderException) {
+            // Algunos Keystore de Android 7-9 lanzan ProviderException (runtime) ante fallos del TEE.
+            Log.e(TAG, "SESSION_KEYSTORE_ERROR: Keystore no disponible al cifrar: ${e.message}", e)
+            cerrarSesion()
         }
     }
 
@@ -107,6 +112,10 @@ class SessionManager(context: Context) {
             null
         } catch (e: JSONException) {
             Log.w(TAG, "SESSION_JSON_WARN: Payload de sesión inválido: ${e.message}", e)
+            cerrarSesion()
+            null
+        } catch (e: ProviderException) {
+            Log.w(TAG, "SESSION_KEYSTORE_WARN: Keystore no disponible al descifrar: ${e.message}", e)
             cerrarSesion()
             null
         }

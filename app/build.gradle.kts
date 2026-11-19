@@ -1,20 +1,8 @@
-import java.util.Properties
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.gms.google.services)
 }
-
-val localProps = Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) {
-        file.inputStream().use { load(it) }
-    }
-}
-val initialAdminPassword = localProps.getProperty("admin.initial.password", "")
-    .replace("\\", "\\\\")
-    .replace("\"", "\\\"")
 
 android {
     namespace = "com.example.controlpuerta"
@@ -24,7 +12,8 @@ android {
 
     defaultConfig {
         applicationId = "com.example.controlpuerta"
-        minSdk = 24
+        // 26: requerido por PBKDF2WithHmacSHA256 (hash de contraseñas con sal).
+        minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -40,16 +29,25 @@ android {
         }
         create("admin") {
             dimension = "role"
-            // Solo la variante administrativa recibe el secreto de arranque para admin_maestro.
-            buildConfigField("String", "INITIAL_ADMIN_PASSWORD", "\"$initialAdminPassword\"")
+            applicationIdSuffix = ".admin"
         }
     }
 
     buildTypes {
+        debug {
+            // El modo simulación (escribe en Firestore sin hardware) solo existe en compilaciones de desarrollo.
+            buildConfigField("boolean", "ALLOW_SIMULATION", "true")
+        }
         release {
+            buildConfigField("boolean", "ALLOW_SIMULATION", "false")
             optimization {
                 enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
+                packageScope = setOf(
+                    "com.example.controlpuerta.**",
+                    "androidx.**",
+                    "kotlin.**",
+                    "kotlinx.**"
+                )
             }
         }
     }

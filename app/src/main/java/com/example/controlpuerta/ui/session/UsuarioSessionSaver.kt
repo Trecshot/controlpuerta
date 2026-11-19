@@ -6,6 +6,7 @@ import com.example.controlpuerta.model.Usuario
 
 /**
  * Conserva la sesión activa ante rotaciones de pantalla sin almacenar hashes de contraseña en el Bundle.
+ * La restauración es tolerante a datos corruptos: ante cualquier tipo inesperado devuelve `null`.
  */
 val UsuarioSessionSaver: Saver<Usuario?, Any> = listSaver(
     save = { usuario ->
@@ -21,15 +22,19 @@ val UsuarioSessionSaver: Saver<Usuario?, Any> = listSaver(
         }
     },
     restore = { saved ->
-        if (saved.size < 4) {
+        val username = saved.getOrNull(0) as? String
+        val rol = saved.getOrNull(1) as? String
+        val intentos = saved.getOrNull(2) as? Int
+        val bloqueado = saved.getOrNull(3) as? Boolean
+        if (username == null || rol == null || intentos == null || bloqueado == null) {
             null
         } else {
             Usuario(
-                username = saved[0] as String,
+                username = username,
                 passwordHash = "",
-                rol = saved[1] as String,
-                intentosFallidos = saved[2] as Int,
-                bloqueado = saved[3] as Boolean
+                rol = rol,
+                intentosFallidos = intentos,
+                bloqueado = bloqueado
             )
         }
     }
